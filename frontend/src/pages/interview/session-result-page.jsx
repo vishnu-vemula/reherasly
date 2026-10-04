@@ -62,10 +62,21 @@ function AnswerReview({ answer, index, category, open, onToggle }) {
 export default function SessionResultPage() {
   const { id } = useParams();
   const [openIdx, setOpenIdx] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const { data: session, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['session', id],
     queryFn: () => sessionAPI.getById(id).then((r) => r.data.session),
+    refetchInterval: (query) => query.state.data?.status === 'evaluating' ? 5000 : false,
   });
+
+  const retryScoring = async () => {
+    setRetrying(true);
+    setRetryError('');
+    try { await sessionAPI.complete(id); await refetch(); }
+    catch (err) { setRetryError(getErrorMessage(err, 'Scoring is unavailable. Please try again.')); await refetch(); }
+    finally { setRetrying(false); }
+  };
 
   if (isLoading) return <LoadingState label="Loading your report" className="min-h-[60vh]" />;
   if (isError) {
@@ -83,16 +94,23 @@ export default function SessionResultPage() {
   const interviewId = interview._id || session.interviewId;
 
   if (session.status !== 'completed') {
+    const evaluating = session.status === 'evaluating';
+    const stale = evaluating && (!session.evaluationStartedAt ||
+      Date.now() - new Date(session.evaluationStartedAt).getTime() >= 10 * 60_000);
     return (
-      <EmptyState
-        className="mt-6"
-        icon={Play}
-        title="This session isn’t scored yet"
-        description={session.status === 'evaluation_failed'
-          ? 'Scoring didn’t finish. Your answers are saved — open the session and finish again to retry.'
-          : 'Finish the interview to get your per-answer report.'}
-        action={<Button to={`/interviews/${interviewId}/session`} variant="lime" icon={Play}>Open session</Button>}
-      />
+      <>
+        <EmptyState
+          className="mt-6"
+          icon={Play}
+          title={evaluating ? 'Scoring your answers' : 'This session isn’t scored yet'}
+          description={evaluating ? 'Your answers are saved. This page updates when the report is ready.' : session.status === 'evaluation_failed'
+            ? 'Scoring didn’t finish. Your answers are saved — open the session and finish again to retry.'
+            : 'Finish the interview to get your per-answer report.'}
+          action={evaluating ? stale ? <Button variant="lime" loading={retrying} onClick={retryScoring}>Retry scoring</Button> : null
+            : <Button to={`/interviews/${interviewId}/session`} variant="lime" icon={Play}>Open session</Button>}
+        />
+        {retryError && <p role="alert" className="mt-4 text-center text-[14px] text-coral">{retryError}</p>}
+      </>
     );
   }
 

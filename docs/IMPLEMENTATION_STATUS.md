@@ -1,4 +1,4 @@
-# Implementation status (2026-09-27)
+# Implementation status (updated 2026-10-04)
 
 The live Express routes now use Firebase ID tokens, PostgreSQL/Prisma users and application records, and a consolidated PostgreSQL job listing. The frontend uses the Firebase SDK for candidate and admin login and does not persist application JWTs. MongoDB code remains only in migration tools and an isolated legacy regression test app; `api/src/server.ts` does not connect to MongoDB. These changes still require full acceptance and provider checks before production deployment.
 
@@ -27,5 +27,15 @@ The live Express routes now use Firebase ID tokens, PostgreSQL/Prisma users and 
 
 - Generation/evaluation and resume parsing still run in request processes. PostgreSQL leases make retries safer, but a durable worker and alerting are needed for process crash recovery.
 - Cloudinary and Firebase cleanup are recorded in a PostgreSQL outbox and retried after partial failure. These external operations are not distributed transactions; recurring failures require operator attention.
-- Admin mutation audit rows are currently written after HTTP responses and a persistence failure is logged. A strict audit guarantee would require a transactional audit write in each mutating service.
+- Admin mutation audit intents are written before handlers run. An interrupted request can leave a `warning` row for operator review; a strict final outcome guarantee still requires a transactional audit write in each mutating service.
 - The legacy regression suite is separate from live-route acceptance; passing it does not establish Firebase/PostgreSQL functionality.
+- The frontend development toolchain still reports five high advisories through Tailwind 3's glob dependencies. The current `braces` advisory lists no patched version; a Tailwind 4 migration needs visual regression testing. Production dependency audits report zero vulnerabilities.
+
+## October hardening
+
+- API limits now use a shared Redis store in production; reverse-proxy trust is explicit, browser Socket.IO origins are checked, UUID routes reject malformed IDs, and AI calls have bounded timeouts.
+- Generated interviews retain their questions after the source resume is deleted. Pending generation blocks that deletion, and deleting a default resume promotes another resume.
+- Payment checkout retries reuse one idempotency key, the result page retries transient status failures, and old pending refunds remain eligible for reconciliation. Refunds accepted without a request ID recover it through PayU transaction history after matching the refund token and amount.
+- In-progress question generation and scoring are visible after refresh and can be retried after their leases expire. Scoring attempt timestamps keep an older worker from committing over a newer attempt.
+- Admin mutations require a persisted audit intent before handlers run. An interrupted request leaves a warning row for investigation.
+- On this workstation, API typecheck/build and frontend lint/build pass. Four API tests pass; 19 integration tests skip because disposable PostgreSQL, MongoDB and the Firebase Auth Emulator are unavailable. CI config provisions these services, but its current run has not been observed here.

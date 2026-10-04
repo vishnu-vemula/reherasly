@@ -21,7 +21,12 @@ const firebaseMessage = (error, fallback) => {
 };
 
 const syncUser = async () => {
+  const requestedUid = auth?.currentUser?.uid;
+  if (!requestedUid) throw new Error('Sign-in session changed. Please try again.');
   const { data } = await api.post('/auth/firebase/session');
+  if (auth?.currentUser?.uid !== requestedUid) {
+    throw new Error('Sign-in session changed. Please try again.');
+  }
   useFirebaseAuthStore.setState({ user: data.user, isAuthenticated: true, isLoading: false });
   return data.user;
 };
@@ -110,12 +115,18 @@ export const useFirebaseAuthStore = create((set, get) => ({
 }));
 
 if (auth) {
+  let observedAuthVersion = 0;
   onAuthStateChanged(auth, async (firebaseUser) => {
+    const version = ++observedAuthVersion;
     if (!firebaseUser || !firebaseUser.emailVerified) {
       useFirebaseAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
       return;
     }
     try { await syncUser(); }
-    catch { useFirebaseAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false }); }
+    catch {
+      if (version === observedAuthVersion) {
+        useFirebaseAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
+      }
+    }
   });
 }

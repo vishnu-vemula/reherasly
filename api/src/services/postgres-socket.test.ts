@@ -11,6 +11,24 @@ import { resolvePostgresUser } from './postgres-identity.service';
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = Boolean(url?.endsWith('/interviewmaster_test') && process.env.FIREBASE_AUTH_EMULATOR_HOST);
+test('Socket.IO rejects requests from an unapproved browser origin before authentication', async () => {
+  process.env.CLIENT_URL = 'http://localhost:5173';
+  const server = createServer();
+  const io = initPostgresSocket(server);
+  await new Promise<void>(done => server.listen(0, done));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Server did not bind');
+    const response = await fetch(`http://127.0.0.1:${address.port}/socket.io/?EIO=4&transport=polling`, {
+      headers: { Origin: 'https://unapproved.example' },
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await new Promise<void>(done => io.close(() => done()));
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+  }
+});
 test('Socket.IO accepts Firebase ID tokens and denies banned users and cross-user records in PostgreSQL',
   { skip: !enabled }, async () => {
     process.env.DATABASE_URL = url;

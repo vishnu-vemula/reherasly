@@ -57,7 +57,7 @@ export const orderStatus = async (req: Request, res: Response) => {
   if (['pending', 'failed', 'success'].includes(order.status)) {
     try { await reconcilePayment(order.transactionId); } catch { /* Provider may not have settled. */ }
   }
-  if (order.status === 'refund_pending' && order.refundRequestId) {
+  if (order.status === 'refund_pending') {
     try { await reconcileRefund(order.id); } catch { /* Retry later. */ }
   }
   const current = await prisma.paymentOrder.findUniqueOrThrow({ where: { id: order.id } });

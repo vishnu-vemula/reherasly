@@ -14,10 +14,13 @@ const presentQuestion = (row: Question) => ({
 const present = (row: Interview & { questions?: Question[]; resume?: { id: string; originalName: string } | null }) => ({
   _id: row.id, id: row.id, userId: row.userId,
   resumeId: row.resume ? { _id: row.resume.id, originalName: row.resume.originalName } : row.resumeId,
+  usedResume: Boolean(row.resumeId || (row.resumeSnapshot && typeof row.resumeSnapshot === 'object' &&
+    !Array.isArray(row.resumeSnapshot) && (row.resumeSnapshot as Record<string, unknown>).hadResume === true)),
   jobTitle: row.jobTitle, jobDescription: row.jobDescription, company: row.company,
   experienceLevel: row.experienceLevel, questionTypes: row.questionTypes,
   numberOfQuestions: row.questionCount, questions: row.questions?.map(presentQuestion),
   generationStatus: row.generationStatus, generationError: row.errorCode,
+  generationStartedAt: row.generationStartedAt,
   status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt,
 });
 
@@ -47,7 +50,9 @@ export const generateQuestions = async (req: Request, res: Response, next: NextF
   const staleBefore = new Date(Date.now() - 10 * 60_000);
   const claim = await prisma.interview.updateMany({ where: { id, userId: ownerId(req), OR: [
     { generationStatus: { in: ['pending', 'failed'] } },
+    { generationStatus: 'generated', questions: { none: {} } },
     { generationStatus: 'generating', generationStartedAt: { lt: staleBefore } },
+    { generationStatus: 'generating', generationStartedAt: null },
   ] }, data: { generationStatus: 'generating', generationStartedAt: new Date(), generationAttemptId: attemptId } });
   if (!claim.count) return next(new AppError('Questions are already being generated.', 409));
   try {

@@ -86,6 +86,8 @@ test('Firebase + PostgreSQL candidate interview/session journey preserves quota 
       response = await request(`/interviews/${interviewId}/generate`, owner.token);
       assert.equal(response.status, 503);
       assert.equal((await db.usageCounter.findFirst({ where: { userId: owner.appUser.id } }))?.units, 0);
+      // Repair an inconsistent imported row marked generated without questions.
+      await db.interview.update({ where: { id: interviewId }, data: { generationStatus: 'generated' } });
       malformedQuestions = false;
       response = await request(`/interviews/${interviewId}/generate`, owner.token);
       assert.equal(response.status, 200);
@@ -99,15 +101,32 @@ test('Firebase + PostgreSQL candidate interview/session journey preserves quota 
       const startBodies = await Promise.all(starts.map(item => item.json()));
       const sessionId = startBodies[0].session.id;
       assert.ok(startBodies.every(item => item.session.id === sessionId));
+      await db.session.update({ where: { id: sessionId }, data: {
+        status: 'evaluating', evaluationStartedAt: new Date() } });
+      response = await request('/sessions/start', owner.token, { interviewId });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).session.status, 'evaluating');
+      await db.session.update({ where: { id: sessionId }, data: {
+        status: 'in_progress', evaluationStartedAt: null } });
       response = await request(`/sessions/${sessionId}`, other.token, undefined, 'GET');
       assert.equal(response.status, 404);
       response = await request(`/sessions/${sessionId}/complete`, owner.token);
       assert.equal(response.status, 400);
-      for (const question of questions) {
+      for (const question of [...questions].reverse()) {
         response = await request(`/sessions/${sessionId}/answer`, owner.token,
           { questionId: question.id, answerText: 'I would use transactions and retries.', timeTaken: 10 });
         assert.equal(response.status, 200);
       }
+      await db.answer.update({ where: { sessionId_questionId: { sessionId, questionId: questions[0].id } },
+        data: { followupUsed: true } });
+      response = await request(`/sessions/${sessionId}/answer`, owner.token,
+        { questionId: questions[0].id, answerText: 'I would use transactions and retries.', timeTaken: 11 });
+      assert.equal(response.status, 200);
+      response = await request(`/sessions/${sessionId}/answer`, owner.token,
+        { questionId: questions[0].id, answerText: 'I would use transactions, retries, and idempotency.', timeTaken: 12 });
+      assert.equal(response.status, 200);
+      assert.equal((await db.answer.findUnique({ where: { sessionId_questionId: {
+        sessionId, questionId: questions[0].id } } }))?.followupUsed, true);
       response = await request(`/sessions/${sessionId}/complete`, owner.token);
       assert.equal(response.status, 503);
       malformedEvaluation = false;
@@ -116,6 +135,12 @@ test('Firebase + PostgreSQL candidate interview/session journey preserves quota 
       response = await request(`/sessions/${sessionId}/complete`, owner.token);
       assert.equal(response.status, 200);
       assert.equal((await db.user.findUnique({ where: { id: owner.appUser.id } }))?.totalSessions, 1);
+      response = await request(`/sessions/${sessionId}`, owner.token, undefined, 'GET');
+      assert.equal(response.status, 200);
+      const report = (await response.json()).session;
+      assert.equal(report.interviewId.questions.length, 3);
+      assert.ok(report.interviewId.questions.every((question: any) => question.category));
+      assert.deepEqual(report.answers.map((answer: any) => answer.questionId), questions.map((question: any) => question.id));
     } finally {
       (groq.chat.completions as any).create = originalAI;
       server.closeAllConnections();

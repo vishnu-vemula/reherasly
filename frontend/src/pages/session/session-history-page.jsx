@@ -49,7 +49,7 @@ export default function SessionHistoryPage() {
             const status = STATUS[s.status] || { label: s.status, tone: 'stone' };
             const done = s.status === 'completed';
             const interviewId = s.interviewId?._id;
-            const to = done ? `/sessions/${s._id}/results` : interviewId ? `/interviews/${interviewId}/session` : null;
+            const to = done || s.status === 'evaluating' ? `/sessions/${s._id}/results` : interviewId ? `/interviews/${interviewId}/session` : null;
             const body = (
               <>
                 <div className="min-w-0">
@@ -62,7 +62,7 @@ export default function SessionHistoryPage() {
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-3">
-                  {done ? <ScorePill score={s.overallScore} /> : to && <span className="mono-label text-brand-600">Resume</span>}
+                  {done ? <ScorePill score={s.overallScore} /> : to && <span className="mono-label text-brand-600">{s.status === 'evaluating' ? 'View status' : 'Resume'}</span>}
                   {to && <ArrowRight size={16} className="text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-ink" aria-hidden="true" />}
                 </div>
               </>

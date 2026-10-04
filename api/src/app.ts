@@ -12,6 +12,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
 import compression from 'compression';
 import prisma from './config/prisma';
 import { getClient } from './config/redis';
@@ -28,6 +29,25 @@ import jobsRoutes from './routes/jobs.routes';
 import adminRoutes from './routes/admin.routes';
 import billingRoutes from './routes/billing.routes';
 const app = express();
+
+// Only trust the explicitly configured number of reverse proxies. Trusting all
+// forwarded addresses lets callers choose their own rate-limit identity.
+const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (!Number.isInteger(trustedProxyHops) || trustedProxyHops < 0 || trustedProxyHops > 5) {
+  throw new Error('TRUST_PROXY_HOPS must be an integer between 0 and 5');
+}
+app.set('trust proxy', trustedProxyHops);
+
+const rateLimitStore = (prefix: string) => process.env.REDIS_ENABLED === 'false'
+  ? undefined
+  : new RedisStore({
+    prefix: `rl:${prefix}:`,
+    sendCommand: async (...args: string[]) => {
+      const client = getClient()?.native;
+      if (!client?.isReady) throw new Error('Redis rate-limit store unavailable');
+      return client.sendCommand(args);
+    },
+  });
 
 // ─── Security Headers ─────────────────────────────────────────────
 app.use(helmet());
@@ -70,15 +90,34 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'Idempotency-Key'],
 }));
 
+// Authenticated API responses include profiles, resumes and payment state.
+// Do not leave those responses in browser or intermediary caches.
+app.use('/api', (req, res, next) => {
+  if (req.headers.authorization) res.set('Cache-Control', 'no-store');
+  next();
+});
+
 
 // ─── Rate Limiting ─────────────────────────────────────────────────
 app.use('/api/', rateLimit({
   skip: (req) => req.path === '/billing/payu/webhook' || req.path === '/billing/payu/return',
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max:      parseInt(process.env.RATE_LIMIT_MAX)        || 100,
+  store: rateLimitStore('api'),
   standardHeaders: true,
   legacyHeaders:   false,
   message: { success: false, message: 'Too many requests. Please try again later.' },
+}));
+
+// PayU callbacks bypass the ordinary API quota so provider retries are not
+// blocked by customer traffic, but still need a bounded public request rate.
+app.use('/api/billing/payu', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  store: rateLimitStore('payu'),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many payment notifications.' },
 }));
 
 // ─── Body Parsers ──────────────────────────────────────────────────

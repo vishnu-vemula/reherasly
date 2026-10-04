@@ -44,7 +44,7 @@ ${jdText || 'Not provided'}`;
     temperature: 0.2,
     max_tokens: 2048,
     response_format: { type: 'json_object' },
-  });
+  }, { signal: AbortSignal.timeout(45_000), maxRetries: 1 });
 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('No response from AI parser.');

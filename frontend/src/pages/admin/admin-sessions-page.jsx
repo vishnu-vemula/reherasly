@@ -165,7 +165,7 @@ export default function AdminSessionsPage() {
                       </td>
                       <td><Pill tone={st.tone} mono>{st.label}</Pill></td>
                       <td><ScorePill score={s.overallScore} /></td>
-                      <td className="tabular">{s.answers?.length ?? 0}</td>
+                      <td className="tabular">{s.answerCount ?? 0}</td>
                       <td className="whitespace-nowrap">
                         <p className="whitespace-nowrap text-[13px]">{formatDate(s.createdAt)}</p>
                         <p className="whitespace-nowrap text-[12px] text-muted">{timeAgo(s.createdAt)}</p>

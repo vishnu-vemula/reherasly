@@ -13,6 +13,7 @@ import AppError from '../utils/app-error';
 import { requirePermission } from '../middleware/rbac';
 import prisma from '../config/prisma';
 import logger from '../config/logger';
+import uuidParam from '../middleware/uuid-param';
 
 const requireSuperAdmin = (req: any, _res: any, next: any) =>
   req.admin?.role === 'super_admin' ? next() : next(new AppError('Super admin required.', 403));
@@ -91,19 +92,29 @@ router.get('/auth/me', protectAdmin, (req, res) => res.json({ success: true,
 
 // ── Protected admin routes (require admin or super_admin role) ─────
 router.use(protectAdmin);
-router.use((req, res, next) => {
-  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) {
-    const actorUserId = String(req.admin?.id || req.admin?._id || '');
-    const category = req.path.split('/').filter(Boolean)[0] || 'admin';
+router.param('id', uuidParam);
+router.use(async (req, res, next) => {
+  if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) return next();
+  const actorUserId = String(req.admin?.id || req.admin?._id || '');
+  const segments = req.path.split('/').filter(Boolean);
+  const category = segments[0] || 'admin';
+  try {
+    // Persist an intent before any mutation. If the response or process is
+    // interrupted, operators can see the unresolved warning in audit logs.
+    const event = await prisma.auditEvent.create({ data: { actorUserId,
+      action: `${req.method} ${req.path}`, category, status: 'warning',
+      details: 'Request started', targetType: category,
+      targetId: segments[1] || 'collection' } });
     res.once('finish', () => {
-      prisma.auditEvent.create({ data: { actorUserId, action: `${req.method} ${req.path}`,
-        category, status: res.statusCode < 400 ? 'success' : 'failed',
-        details: `HTTP ${res.statusCode}`, targetType: category,
-        targetId: req.path.split('/').filter(Boolean)[2] || 'collection' } })
-        .catch(error => logger.error(`Admin audit persistence failed: ${error.message}`));
+      prisma.auditEvent.update({ where: { id: event.id }, data: {
+        status: res.statusCode < 400 ? 'success' : 'failed', details: `HTTP ${res.statusCode}`,
+      } }).catch(error => logger.error(`Admin audit completion failed for ${event.id}: ${error.message}`));
     });
+    next();
+  } catch (error: any) {
+    logger.error(`Admin audit intent failed: ${error?.message || 'Error'}`);
+    next(new AppError('Admin changes are unavailable while audit logging is down.', 503));
   }
-  next();
 });
 router.use('/users', requirePermission('view:users'));
 router.use('/jobs', requirePermission('view:jobs'));

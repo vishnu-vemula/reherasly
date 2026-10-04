@@ -3,6 +3,7 @@ import { body } from 'express-validator';
 const router = express.Router();
 import { protectPostgres } from '../middleware/postgres-auth.middleware';
 import validate from '../middleware/validate';
+import uuidParam from '../middleware/uuid-param';
 import {
   createInterview,
   generateQuestions,
@@ -30,6 +31,7 @@ const createValidation = [
 ];
 
 router.use(protectPostgres);
+router.param('id', uuidParam);
 
 router.get('/', getMyInterviews);
 router.post('/', createValidation, validate, createInterview);

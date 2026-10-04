@@ -10,9 +10,8 @@ export async function reconcileOutstandingOrders(now = new Date()) {
   const recent = new Date(now.getTime() - 7 * 86400000);
   for (let i = 0; i < 20; i++) {
     const candidate = await prisma.paymentOrder.findFirst({ where: {
-      createdAt: { gt: recent },
-      OR: [{ status: { in: ['pending', 'failed'] } },
-        { status: 'refund_pending', refundRequestId: { not: null } }],
+      OR: [{ createdAt: { gt: recent }, status: { in: ['pending', 'failed'] } },
+        { status: 'refund_pending' }],
       AND: [{ OR: [{ lastReconciledAt: null }, { lastReconciledAt: { lte: cutoff } }] },
         { OR: [{ reconcileLeaseUntil: null }, { reconcileLeaseUntil: { lt: now } }] }],
     }, orderBy: [{ lastReconciledAt: 'asc' }, { createdAt: 'asc' }] });

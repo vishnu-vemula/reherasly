@@ -19,8 +19,9 @@ test('PostgreSQL PayU checkout, callback, refund and entitlements are idempotent
       amountMinor: 12500, currency: 'INR', durationDays: 30, credits: 3, entitlements: { credits: 3 },
     } });
     const originalFetch = globalThis.fetch;
-    const { createCheckout, reconcilePayment, handlePaymentNotification, requestRefund, reconcileRefund } =
+    const { createCheckout, reconcilePayment, handlePaymentNotification, requestRefund } =
       await import('./postgres-billing.js');
+    const { reconcileOutstandingOrders } = await import('./postgres-billing-reconciliation.js');
     let verifiedStatus = 'failure';
     let refundToken = '';
     let fields: any;
@@ -34,7 +35,14 @@ test('PostgreSQL PayU checkout, callback, refund and entitlements are idempotent
           status: verifiedStatus, unmappedstatus: verifiedStatus === 'success' ? 'captured' : 'failed',
           mihpayid: 'payu-fixture-id' },
       } };
-      else if (form.get('command') === 'cancel_refund_transaction') data = { status: 1, request_id: 'refund-fixture-id' };
+      else if (form.get('command') === 'cancel_refund_transaction') data = { status: 1 };
+      else if (form.get('command') === 'check_action_status') {
+        assert.equal(form.get('var2'), 'payuid');
+        data = { status: 1, transaction_details: { 'payu-fixture-id': {
+          'refund-fixture-id': { request_id: 'refund-fixture-id', action: 'refund',
+            token: refundToken, mihpayid: 'payu-fixture-id', amt: '125.00', status: 'success' },
+        } } };
+      }
       else if (form.get('command') === 'check_action_status_txnid') data = { status: 1, transaction_details: {
         'refund-fixture-id': { 'refund-fixture-id': { token: refundToken,
           mihpayid: 'payu-fixture-id', amt: '125.00', status: 'success' } },
@@ -71,8 +79,12 @@ test('PostgreSQL PayU checkout, callback, refund and entitlements are idempotent
       const refund = await requestRefund(order.id);
       refundToken = refund.refundToken!;
       assert.equal(refund.status, 'refund_pending');
-      await reconcileRefund(order.id);
+      assert.equal(refund.refundRequestId, null);
+      await db.paymentOrder.update({ where: { id: order.id }, data: {
+        createdAt: new Date(Date.now() - 8 * 86_400_000) } });
+      assert.ok((await reconcileOutstandingOrders()).attempted >= 1);
       assert.equal((await db.paymentOrder.findUnique({ where: { id: order.id } }))?.status, 'refunded');
+      assert.equal((await db.paymentOrder.findUnique({ where: { id: order.id } }))?.refundRequestId, 'refund-fixture-id');
       assert.equal((await db.subscription.findUnique({ where: { orderId: order.id } }))?.status, 'refunded');
     } finally {
       globalThis.fetch = originalFetch;

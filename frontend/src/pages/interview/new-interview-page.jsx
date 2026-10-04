@@ -139,7 +139,7 @@ export default function NewInterviewPage() {
       <PageHeader
         eyebrow="New interview"
         title="Build an interview for one role"
-        description="Paste the job description, pick what to practise, and we’ll ground every question in your resume."
+        description="Paste the job description, pick what to practise, and optionally add a resume to tailor the questions."
       />
 
       <StepIndicator step={step} />

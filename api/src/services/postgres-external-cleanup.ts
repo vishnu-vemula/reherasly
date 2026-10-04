@@ -57,12 +57,14 @@ export async function processExternalCleanupJob(id: string): Promise<boolean> {
       if (!payload.firebaseUid) throw new Error('Invalid Firebase cleanup payload');
       await deleteFirebaseIdentity(payload.firebaseUid);
     }
-    await prisma.backgroundJob.update({ where: { id }, data: { state: 'succeeded', errorCode: null, nextAttemptAt: null } });
+    await prisma.backgroundJob.updateMany({ where: { id, state: 'running', attempts: job.attempts },
+      data: { state: 'succeeded', errorCode: null, nextAttemptAt: null } });
     return true;
   } catch (error) {
     const wait = Math.min(3_600_000, 5_000 * 2 ** Math.min(job.attempts, 10));
-    await prisma.backgroundJob.update({ where: { id }, data: { state: 'failed', errorCode: 'external_cleanup_failed',
-      nextAttemptAt: new Date(Date.now() + wait) } });
+    await prisma.backgroundJob.updateMany({ where: { id, state: 'running', attempts: job.attempts },
+      data: { state: 'failed', errorCode: 'external_cleanup_failed',
+        nextAttemptAt: new Date(Date.now() + wait) } });
     logger.error(`External cleanup job ${id} failed: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }

@@ -35,9 +35,16 @@ export const getAllUsers = async (req: Request, res: Response) => {
 export const getUserById = async (req: Request, res: Response, next: NextFunction) => {
   const id = String(req.params.id);
   const user = await prisma.user.findUnique({ where: { id }, include: {
-    resumes: { orderBy: { createdAt: 'desc' } },
-    sessions: { orderBy: { createdAt: 'desc' }, take: 50,
-      include: { interview: { select: { id: true, jobTitle: true, company: true } } } },
+    // Support staff need resume status and size, not the candidate's extracted
+    // text, parsed profile, or private Cloudinary storage identifier.
+    resumes: { orderBy: { createdAt: 'desc' }, select: {
+      id: true, originalName: true, fileName: true, sizeBytes: true,
+      parseStatus: true, createdAt: true,
+    } },
+    sessions: { orderBy: { createdAt: 'desc' }, take: 50, select: {
+      id: true, status: true, overallScore: true, createdAt: true,
+      interview: { select: { id: true, jobTitle: true, company: true } },
+    } },
   } });
   if (!user) return next(new AppError('User not found.', 404));
   const [interviewCount, sessionCount, resumeCount] = await Promise.all([
@@ -99,13 +106,15 @@ export const bulkUserAction = async (req: Request, res: Response, next: NextFunc
   }
   if (!['activate', 'deactivate', 'ban', 'unban', 'delete'].includes(action)) return next(new AppError('Invalid bulk action.', 400));
   if (action === 'delete' && req.admin?.role !== 'super_admin') return next(new AppError('Bulk deletion requires a super admin.', 403));
-  const users = await prisma.user.findMany({ where: { id: { in: userIds }, role: 'candidate' } });
+  const users = await prisma.user.findMany({ where: { id: { in: userIds }, role: 'candidate',
+    ...(action !== 'delete' && { status: { not: 'deleted' as UserStatus }, deletedAt: null }) } });
   if (!users.length) return next(new AppError('No modifications allowed on protected staff accounts.', 403));
   if (action === 'delete') {
     for (const user of users) await retirePostgresCandidate(user.id, user.firebaseUid);
   } else {
     const status: UserStatus = action === 'ban' ? 'banned' : action === 'deactivate' ? 'disabled' : 'active';
-    await prisma.user.updateMany({ where: { id: { in: users.map(item => item.id) }, role: 'candidate' }, data: { status } });
+    await prisma.user.updateMany({ where: { id: { in: users.map(item => item.id) },
+      role: 'candidate', status: { not: 'deleted' }, deletedAt: null }, data: { status } });
   }
   res.json({ success: true, message: `Bulk ${action} operation completed successfully on ${users.length} users.` });
 };

@@ -160,17 +160,38 @@ export async function requestRefund(orderId: string) {
   }
   if (result.request_id) await prisma.paymentOrder.updateMany({ where: { id: order.id, refundToken: token },
     data: { refundRequestId: String(result.request_id) } });
-  if (!result.request_id) throw new Error('PayU accepted the refund without a request ID; reconcile it manually');
   return prisma.paymentOrder.findUniqueOrThrow({ where: { id: order.id } });
 }
 
 export async function reconcileRefund(orderId: string) {
   const observed = await prisma.paymentOrder.findUnique({ where: { id: orderId } });
-  if (!observed || observed.status !== 'refund_pending' || !observed.refundRequestId) throw new Error('No refund to reconcile');
-  const result = await payuCommand('check_action_status_txnid', observed.refundRequestId);
+  if (!observed || observed.status !== 'refund_pending') throw new Error('No refund to reconcile');
+  let requestId = observed.refundRequestId;
+  if (!requestId) {
+    if (!observed.payuId || !observed.refundToken) throw new Error('Refund identity is incomplete');
+    // PayU can accept a refund when the initiation response is lost or omits
+    // request_id. Its PayU-ID lookup lists all actions, so match this exact
+    // token, transaction and amount before attaching a recovered request ID.
+    const history = await payuCommand('check_action_status', observed.payuId, { var2: 'payuid' });
+    const actions = history?.transaction_details?.[observed.payuId];
+    if (Number(history?.status) !== 1 || !actions || typeof actions !== 'object')
+      throw new Error('PayU refund history is unavailable');
+    const matches = Object.entries(actions).filter(([, value]) => {
+      const detail = value as Record<string, unknown>;
+      return detail && typeof detail === 'object' && String(detail.action || '').toLowerCase() === 'refund' &&
+        String(detail.token || '') === observed.refundToken && String(detail.mihpayid || '') === observed.payuId &&
+        minorOf(detail.amt) === observed.amountMinor;
+    });
+    if (matches.length !== 1) throw new Error('PayU refund request could not be uniquely identified');
+    requestId = String((matches[0][1] as Record<string, unknown>).request_id || matches[0][0]);
+    if (!requestId) throw new Error('PayU refund request ID is unavailable');
+    await prisma.paymentOrder.updateMany({ where: { id: orderId, status: 'refund_pending', refundRequestId: null,
+      refundToken: observed.refundToken }, data: { refundRequestId: requestId } });
+  }
+  const result = await payuCommand('check_action_status_txnid', requestId);
   if (Number(result?.status) !== 1) throw new Error('PayU refund status is unavailable');
-  const outer = result?.transaction_details?.[observed.refundRequestId];
-  const detail = outer?.[observed.refundRequestId] || outer;
+  const outer = result?.transaction_details?.[requestId];
+  const detail = outer?.[requestId] || outer;
   if (String(detail?.token || '') !== observed.refundToken || String(detail?.mihpayid || '') !== observed.payuId ||
     minorOf(detail?.amt) !== observed.amountMinor) throw new Error('Refund status could not be verified');
   return prisma.$transaction(async tx => {

@@ -4,8 +4,15 @@ import prisma from './config/prisma';
 import { resolvePostgresUser } from './services/postgres-identity.service';
 
 export default function initPostgresSocket(httpServer: any) {
+  const allowedOrigin = new URL(process.env.CLIENT_URL || 'http://localhost:5173').origin;
   const io = new Server(httpServer, { cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173', methods: ['GET', 'POST'],
+    origin: allowedOrigin, methods: ['GET', 'POST'],
+  },
+  // Engine.IO CORS applies to polling, but WebSocket upgrades also need an
+  // explicit Origin check. Non-browser clients without Origin still use auth.
+  allowRequest: (request, callback) => {
+    const origin = request.headers.origin;
+    callback(null, !origin || origin === allowedOrigin);
   } });
   io.use(async (socket, next) => {
     try {
@@ -51,7 +58,7 @@ export default function initPostgresSocket(httpServer: any) {
           messages: [{ role: 'system', content: instruction }, { role: 'user', content:
             `Question: ${question.prompt}\nExpected keywords: ${question.expectedKeywords.join(', ') || 'None'}\nCandidate answer: ${answerText}` }],
           temperature: 0.5, max_tokens: 150, stream: true,
-        });
+        }, { signal: AbortSignal.timeout(45_000), maxRetries: 1 });
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content || '';
           if (content) socket.emit('ai_chunk', content);
@@ -59,6 +66,7 @@ export default function initPostgresSocket(httpServer: any) {
         socket.emit('ai_complete');
       } catch {
         if (claimedAnswerId) await prisma.answer.updateMany({ where: { id: claimedAnswerId,
+          text: String(payload?.answerText || '').trim(), followupUsed: true,
           session: { userId: socket.data.userId, status: { in: ['started', 'in_progress'] } } },
           data: { followupUsed: false } }).catch(() => {});
         socket.emit('ai_error', 'Live feedback is unavailable or has already been used for this answer.');

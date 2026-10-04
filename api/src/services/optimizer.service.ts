@@ -39,7 +39,7 @@ Optimized query only.`;
       ],
       temperature: 0.3,
       max_tokens: 256,
-    });
+    }, { signal: AbortSignal.timeout(15_000), maxRetries: 1 });
 
     const content = response.choices[0]?.message?.content?.trim();
     // Strip quotes if AI returned them

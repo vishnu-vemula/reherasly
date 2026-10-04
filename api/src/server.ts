@@ -20,6 +20,8 @@ function validateEnvironment() {
   if (missing.length) throw new Error(`Missing required environment settings: ${missing.join(', ')}`);
   if (!['test', 'production'].includes(process.env.PAYU_ENV!)) throw new Error('PAYU_ENV must be test or production');
   if (process.env.NODE_ENV === 'production') {
+    if (process.env.TRUST_PROXY_HOPS === undefined)
+      throw new Error('TRUST_PROXY_HOPS must be set explicitly in production');
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required for production RAG');
     const configuredSecrets = [
       'GROQ_API_KEY', 'OPENAI_API_KEY', 'CLOUDINARY_CLOUD_NAME',
@@ -35,7 +37,7 @@ function validateEnvironment() {
       let url: URL;
       try { url = new URL(process.env[name]); }
       catch { throw new Error(`${name} must be a valid HTTPS URL in production`); }
-      if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+      if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
         throw new Error(`${name} must be a valid HTTPS URL in production`);
       }
     }

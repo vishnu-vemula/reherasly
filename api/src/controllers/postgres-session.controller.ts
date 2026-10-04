@@ -5,7 +5,9 @@ import AppError from '../utils/app-error';
 import { evaluateAnswer, generateOverallFeedback } from '../services/ai.service';
 
 const ownerId = (req: Request) => String(req.user?.id || req.user?._id || '');
-type Loaded = Session & { answers?: Answer[]; interview?: Partial<Interview> | null };
+type Loaded = Session & { answers?: Answer[]; interview?: (Partial<Interview> & {
+  questions?: { id: string; category: string }[];
+}) | null };
 const presentAnswer = (row: Answer) => ({
   _id: row.id, questionId: row.questionId, questionText: row.questionText,
   answerText: row.text, answerAudio: row.answerAudio, timeTaken: row.timeTakenSeconds,
@@ -18,7 +20,8 @@ const present = (row: Loaded) => {
   return {
     _id: row.id, id: row.id, userId: row.userId,
     interviewId: row.interview ? { _id: row.interview.id, jobTitle: row.interview.jobTitle,
-      company: row.interview.company, experienceLevel: row.interview.experienceLevel } : row.interviewId,
+      company: row.interview.company, experienceLevel: row.interview.experienceLevel,
+      questions: row.interview.questions?.map(question => ({ _id: question.id, category: question.category })) } : row.interviewId,
     answers: row.answers?.map(presentAnswer), status: row.status,
     startedAt: row.startedAt, completedAt: row.completedAt,
     evaluationStartedAt: row.evaluationStartedAt, totalTimeTaken: row.durationSeconds,
@@ -46,7 +49,6 @@ export const startSession = async (req: Request, res: Response, next: NextFuncti
       await tx.interview.update({ where: { id: interviewId }, data: { status: 'in_progress' } });
       return { session, resumed: false };
     });
-    if (result.resumed && result.session.status === 'evaluating') return next(new AppError('Session evaluation is in progress.', 409));
     res.status(result.resumed ? 200 : 201).json({ success: true, session: present(result.session),
       resumed: result.resumed, ...(!result.resumed && { interview: { _id: interview.id, status: 'in_progress' } }) });
   } catch (error: any) {
@@ -73,7 +75,9 @@ export const submitAnswer = async (req: Request, res: Response, next: NextFuncti
     const question = await tx.question.findFirst({ where: { id: questionId, interviewId: session.interviewId } });
     if (!question) return { error: new AppError('Question not found in interview.', 404) };
     await tx.answer.upsert({ where: { sessionId_questionId: { sessionId: id, questionId } },
-      update: { text: skipped ? '' : text, skipped, followupUsed: false,
+      // A follow-up is an allowance for this question in this session. Editing
+      // or resubmitting the answer must not grant another AI request.
+      update: { text: skipped ? '' : text, skipped,
         timeTakenSeconds: Number(req.body.timeTaken || 0), questionText: question.prompt },
       create: { interviewId: session.interviewId, sessionId: id, questionId,
         questionText: question.prompt, text: skipped ? '' : text, skipped,
@@ -93,10 +97,12 @@ export const completeSession = async (req: Request, res: Response, next: NextFun
   const existing = await prisma.session.findFirst({ where: { id, userId: owner, status: 'completed' }, include: { answers: true } });
   if (existing) return res.json({ success: true, session: present(existing) });
   const staleBefore = new Date(Date.now() - 10 * 60_000);
+  const attemptStartedAt = new Date();
   const claim = await prisma.session.updateMany({ where: { id, userId: owner, OR: [
     { status: { in: ['started', 'in_progress', 'evaluation_failed'] } },
     { status: 'evaluating', evaluationStartedAt: { lt: staleBefore } },
-  ] }, data: { status: 'evaluating', evaluationStartedAt: new Date() } });
+    { status: 'evaluating', evaluationStartedAt: null },
+  ] }, data: { status: 'evaluating', evaluationStartedAt: attemptStartedAt } });
   if (!claim.count) return next(new AppError('Session evaluation is already in progress.', 409));
   const session = await prisma.session.findUniqueOrThrow({ where: { id }, include: {
     answers: true, interview: { include: { questions: true } },
@@ -125,7 +131,8 @@ export const completeSession = async (req: Request, res: Response, next: NextFun
     const final = await prisma.$transaction(async tx => {
       for (const { item, score, feedback } of graded) await tx.answer.update({ where: { id: item.id },
         data: { score, feedback, evaluationStatus: 'completed' } });
-      const changed = await tx.session.updateMany({ where: { id, userId: owner, status: 'evaluating' }, data: {
+      const changed = await tx.session.updateMany({ where: { id, userId: owner,
+        status: 'evaluating', evaluationStartedAt: attemptStartedAt }, data: {
         status: 'completed', evaluationStartedAt: null, completedAt: new Date(), overallScore,
         durationSeconds: graded.reduce((sum, item) => sum + item.item.timeTakenSeconds, 0),
         feedback: { overallFeedback: (overallData.improvementTips || []).join(' '),
@@ -140,7 +147,8 @@ export const completeSession = async (req: Request, res: Response, next: NextFun
     });
     res.json({ success: true, session: present(final) });
   } catch {
-    await prisma.session.updateMany({ where: { id, userId: owner, status: 'evaluating' },
+    await prisma.session.updateMany({ where: { id, userId: owner,
+      status: 'evaluating', evaluationStartedAt: attemptStartedAt },
       data: { status: 'evaluation_failed', evaluationStartedAt: null } });
     next(new AppError('Evaluation is temporarily unavailable. Your answers are saved; please retry.', 503));
   }
@@ -159,7 +167,12 @@ export const getMySessions = async (req: Request, res: Response) => {
 
 export const getSessionById = async (req: Request, res: Response, next: NextFunction) => {
   const row = await prisma.session.findFirst({ where: { id: String(req.params.id), userId: ownerId(req) },
-    include: { interview: true, answers: { orderBy: { submittedAt: 'asc' } } } });
+    include: { interview: { include: { questions: { orderBy: { ordinal: 'asc' },
+      select: { id: true, category: true } } } },
+      answers: { orderBy: { submittedAt: 'asc' } } } });
   if (!row) return next(new AppError('Session not found.', 404));
-  res.json({ success: true, session: present(row) });
+  const questionOrder = new Map(row.interview.questions.map((question, index) => [question.id, index]));
+  const ordered = [...row.answers].sort((a, b) =>
+    (questionOrder.get(a.questionId) ?? Infinity) - (questionOrder.get(b.questionId) ?? Infinity));
+  res.json({ success: true, session: present({ ...row, answers: ordered }) });
 };

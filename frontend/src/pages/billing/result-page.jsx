@@ -22,6 +22,7 @@ export default function BillingResultPage() {
   const txnid = params.get('txnid');
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
   const queryClient = useQueryClient();
   const statusRef = useRef(null);
 
@@ -39,12 +40,14 @@ export default function BillingResultPage() {
         statusRef.current = data.order.status;
         if (!FINAL.includes(data.order.status)) timer = setTimeout(check, 5000);
       } catch (err) {
-        if (active) setError(getErrorMessage(err, 'We couldn’t verify this order. Check Plans & billing later.'));
+        if (!active) return;
+        setError(getErrorMessage(err, 'We couldn’t verify this order. Please try again.'));
+        if (err.response?.status !== 404) timer = setTimeout(check, 10000);
       }
     };
     check();
     return () => { active = false; clearTimeout(timer); };
-  }, [txnid, queryClient]);
+  }, [txnid, queryClient, retry]);
 
   const view = order ? VIEW[order.status] || VIEW.pending : null;
   const Icon = view?.icon;
@@ -58,11 +61,12 @@ export default function BillingResultPage() {
             <h1 className="mt-6 text-[30px] font-medium tracking-tight2">No transaction found</h1>
             <p className="mt-2 text-[15px] text-muted-strong">PayU didn’t return a transaction reference to this page.</p>
           </>
-        ) : error ? (
+        ) : error && !order ? (
           <>
             <span className="mx-auto grid h-14 w-14 place-items-center rounded-r18 bg-coral-bg text-coral"><AlertCircle size={24} aria-hidden="true" /></span>
             <h1 className="mt-6 text-[30px] font-medium tracking-tight2">Couldn’t check this payment</h1>
             <p className="mt-2 text-[15px] text-muted-strong">{error}</p>
+            <Button className="mt-5" variant="soft" onClick={() => setRetry((value) => value + 1)}>Try again</Button>
           </>
         ) : !order ? (
           <div role="status" className="py-6">
@@ -71,6 +75,9 @@ export default function BillingResultPage() {
           </div>
         ) : (
           <>
+            {error && <div role="alert" className="mb-5 rounded-r14 bg-coral-bg px-4 py-3 text-[13px] text-coral">
+              {error} <button type="button" className="underline" onClick={() => setRetry((value) => value + 1)}>Try again</button>
+            </div>}
             <span className={`mx-auto grid h-14 w-14 place-items-center rounded-r18 ${view.tone}`}><Icon size={24} aria-hidden="true" /></span>
             <h1 className="mt-6 text-[30px] font-medium tracking-tight2">{view.title}</h1>
             <p className="mt-2 text-[15px] leading-relaxed text-muted-strong">{view.body}</p>

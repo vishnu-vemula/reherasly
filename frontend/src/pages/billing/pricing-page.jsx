@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, Check, Lock, ReceiptText } from 'lucide-react';
 import api from '@/lib/axios';
@@ -25,6 +25,7 @@ function CheckoutModal({ plan, onClose }) {
   const [error, setError] = useState('');
   const [touched, setTouched] = useState(false);
   const [working, setWorking] = useState(false);
+  const checkoutAttempt = useRef({ phone: '', key: makeIdempotencyKey() });
   const phoneValid = /^\d{10}$/.test(phone);
 
   const pay = async (e) => {
@@ -34,7 +35,9 @@ function CheckoutModal({ plan, onClose }) {
     setWorking(true);
     setError('');
     try {
-      const { data } = await api.post('/billing/checkout', { planId: plan._id, phone }, { headers: { 'Idempotency-Key': makeIdempotencyKey() } });
+      if (checkoutAttempt.current.phone !== phone) checkoutAttempt.current = { phone, key: makeIdempotencyKey() };
+      const { data } = await api.post('/billing/checkout', { planId: plan._id, phone },
+        { headers: { 'Idempotency-Key': checkoutAttempt.current.key } });
       // Hand off to PayU hosted checkout with the server-signed fields.
       const form = document.createElement('form');
       form.method = 'POST';

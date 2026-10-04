@@ -83,9 +83,26 @@ test('PostgreSQL resume upload and download enforce Firebase UID ownership',
       assert.match((await response.json()).url, /^https:\/\/example.com\/private\//);
       response = await fetch(`${base}/${row.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${otherToken}` } });
       assert.equal(response.status, 404);
+      const ownerBeforeDelete = await db.user.findUniqueOrThrow({ where: { firebaseUid: created[0] } });
+      const secondary = await db.resume.create({ data: { userId: ownerBeforeDelete.id,
+        storageKey: `secondary-${marker}`, originalName: 'secondary.pdf',
+        contentType: 'application/pdf', sizeBytes: 100 } });
+      const interview = await db.interview.create({ data: { userId: ownerBeforeDelete.id, resumeId: row.id,
+        jobTitle: 'Engineer', jobDescription: 'Build reliable systems', experienceLevel: 'mid', questionCount: 1 } });
+      response = await fetch(`${base}/${row.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${ownerToken}` } });
+      assert.equal(response.status, 409);
+      assert.equal(await db.resume.count({ where: { id: row.id } }), 1);
+      await db.question.create({ data: { interviewId: interview.id, ordinal: 0, category: 'technical',
+        difficulty: 'medium', prompt: 'How would you design this?', expectedKeywords: [], generationVersion: 'test' } });
+      await db.interview.update({ where: { id: interview.id }, data: { generationStatus: 'generated', status: 'ready' } });
       response = await fetch(`${base}/${row.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${ownerToken}` } });
       assert.equal(response.status, 200);
       assert.equal(objects.size, 0);
+      const retained = await db.interview.findUniqueOrThrow({ where: { id: interview.id }, include: { questions: true } });
+      assert.equal(retained.resumeId, null);
+      assert.deepEqual(retained.resumeSnapshot, { hadResume: true });
+      assert.equal(retained.questions.length, 1);
+      assert.equal((await db.resume.findUniqueOrThrow({ where: { id: secondary.id } })).isDefault, true);
       const owner = await db.user.findUniqueOrThrow({ where: { firebaseUid: created[0] } });
       const retryKey = `cleanup-${marker}`;
       const retryResume = await db.resume.create({ data: { userId: owner.id, storageKey: retryKey,

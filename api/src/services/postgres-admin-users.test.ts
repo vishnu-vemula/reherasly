@@ -10,6 +10,7 @@ import { requirePermission } from '../middleware/rbac';
 import { resolvePostgresUser } from './postgres-identity.service';
 import * as users from '../controllers/postgres-admin-users.controller';
 import * as jobs from '../controllers/postgres-admin-jobs.controller';
+import * as content from '../controllers/postgres-admin-content.controller';
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = Boolean(url?.endsWith('/interviewmaster_test') && process.env.FIREBASE_AUTH_EMULATOR_HOST);
@@ -38,6 +39,9 @@ test('current PostgreSQL role and status control admin APIs without client role 
     const app = express();
     app.use(express.json());
     app.get('/users', protectPostgresAdmin, requirePermission('view:users'), users.getAllUsers);
+    app.get('/users/:id', protectPostgresAdmin, requirePermission('view:users'), users.getUserById);
+    app.post('/users/bulk', protectPostgresAdmin, requirePermission('update:users'), users.bulkUserAction);
+    app.get('/resumes', protectPostgresAdmin, requirePermission('view:analytics'), content.getAllResumes);
     app.patch('/users/:id', protectPostgresAdmin, requirePermission('update:users'), users.updateUser);
     app.get('/jobs', protectPostgresAdmin, requirePermission('view:jobs'), jobs.getAllJobs);
     app.post('/jobs', protectPostgresAdmin, requirePermission('create:jobs'), jobs.createJob);
@@ -48,7 +52,13 @@ test('current PostgreSQL role and status control admin APIs without client role 
     try {
       const superAdmin = await makeIdentity('super');
       const candidate = await makeIdentity('candidate');
+      const privateCandidate = await makeIdentity('private');
       await db.user.update({ where: { id: superAdmin.user.id }, data: { role: 'super_admin' } });
+      await db.resume.create({ data: { userId: privateCandidate.user.id,
+        storageKey: `private-${marker}`, originalName: 'candidate.pdf',
+        contentType: 'application/pdf', sizeBytes: 123, extractedText: 'private resume text',
+        parsedData: { skills: ['React'], secret: 'private parsed detail' }, isParsed: true,
+        parseStatus: 'parsed' } });
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('Server did not bind');
       const base = `http://127.0.0.1:${address.port}`;
@@ -58,6 +68,19 @@ test('current PostgreSQL role and status control admin APIs without client role 
       });
       let response = await request('/users', candidate.token);
       assert.equal(response.status, 403);
+      response = await request(`/users/${privateCandidate.user.id}`, superAdmin.token);
+      assert.equal(response.status, 200);
+      const userDetail = await response.text();
+      assert.ok(!userDetail.includes('private resume text'));
+      assert.ok(!userDetail.includes('private parsed detail'));
+      assert.ok(!userDetail.includes(`private-${marker}`));
+      response = await request('/resumes', superAdmin.token);
+      assert.equal(response.status, 200);
+      const resumeList = await response.text();
+      assert.ok(resumeList.includes('React'));
+      assert.ok(!resumeList.includes('private resume text'));
+      assert.ok(!resumeList.includes('private parsed detail'));
+      assert.ok(!resumeList.includes(`private-${marker}`));
       response = await request(`/users/${candidate.user.id}`, superAdmin.token, 'PATCH', { role: 'support' });
       assert.equal(response.status, 200, await response.text());
       response = await request('/users', candidate.token);
@@ -87,6 +110,13 @@ test('current PostgreSQL role and status control admin APIs without client role 
       assert.equal(response.status, 200);
       response = await request(`/users/${superAdmin.user.id}`, superAdmin.token, 'PATCH', { role: 'candidate' });
       assert.equal(response.status, 403);
+      await db.user.update({ where: { id: privateCandidate.user.id }, data: {
+        status: 'deleted', deletedAt: new Date() } });
+      response = await request('/users/bulk', superAdmin.token, 'POST', {
+        userIds: [privateCandidate.user.id], action: 'activate',
+      });
+      assert.equal(response.status, 403);
+      assert.equal((await db.user.findUniqueOrThrow({ where: { id: privateCandidate.user.id } })).status, 'deleted');
       await db.user.update({ where: { id: candidate.user.id }, data: { status: 'banned' } });
       response = await request('/users', candidate.token);
       assert.equal(response.status, 403);

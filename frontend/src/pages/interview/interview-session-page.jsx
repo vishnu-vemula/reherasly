@@ -21,7 +21,28 @@ const CATEGORY_LABEL = { technical: 'Technical', behavioral: 'Behavioral', situa
 function GenerateState({ interview, onGenerated }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [now, setNow] = useState(Date.now());
   const queryClient = useQueryClient();
+  const generating = interview.generationStatus === 'generating';
+  const stale = generating && (!interview.generationStartedAt ||
+    now - new Date(interview.generationStartedAt).getTime() >= 10 * 60_000);
+
+  useEffect(() => {
+    if (!generating) return undefined;
+    let active = true;
+    let checking = false;
+    const timer = setInterval(async () => {
+      if (checking) return;
+      checking = true;
+      setNow(Date.now());
+      try {
+        const { data } = await interviewAPI.getById(interview._id);
+        if (active && data.interview.generationStatus !== 'generating') await onGenerated();
+      } catch { /* Status checks resume on the next interval. */ }
+      finally { checking = false; }
+    }, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [generating, interview._id, onGenerated]);
 
   const run = async () => {
     setBusy(true);
@@ -33,6 +54,7 @@ function GenerateState({ interview, onGenerated }) {
       await onGenerated();
     } catch (err) {
       setError({ message: getErrorMessage(err, 'Question generation failed. Please retry.'), status: err.response?.status });
+      await onGenerated();
       setBusy(false);
     }
   };
@@ -50,7 +72,7 @@ function GenerateState({ interview, onGenerated }) {
         {busy
           ? 'We’re mapping the job description to your experience. This usually takes 5–20 seconds.'
           : interview.generationStatus === 'generating'
-            ? 'If generation was interrupted, try again. The server will safely resume a stale attempt.'
+            ? 'Generation is running. This page checks for your questions automatically; an interrupted attempt can be retried after 10 minutes.'
             : 'Generate the questions for this interview to start practising. Generating uses one interview from your allowance.'}
       </p>
       {error && (
@@ -60,8 +82,8 @@ function GenerateState({ interview, onGenerated }) {
       )}
       <div className="mt-8 flex flex-wrap justify-center gap-2">
         <Button to="/interviews" variant="ghost" icon={ArrowLeft}>Back to interviews</Button>
-        <Button variant="lime" icon={error || interview.generationStatus === 'generating' ? RotateCw : Sparkles} loading={busy} onClick={run}>
-          {error || interview.generationStatus === 'generating' ? 'Try again' : 'Generate questions'}
+        <Button variant="lime" icon={error || generating ? RotateCw : Sparkles} loading={busy} disabled={generating && !stale} onClick={run}>
+          {generating && !stale ? 'Generating…' : error || generating ? 'Try again' : 'Generate questions'}
         </Button>
       </div>
     </div>
@@ -118,6 +140,10 @@ export default function InterviewSessionPage() {
       if (!iv.questions?.length) return; // show the generate state
       const { data: sessData } = await sessionAPI.start(interviewId);
       const s = sessData.session;
+      if (s.status === 'evaluating') {
+        navigate(`/sessions/${s._id}/results`, { replace: true });
+        return;
+      }
       setSession(s);
       // Restore saved answers when resuming, and jump to the first unanswered question.
       const restored = {};
@@ -139,7 +165,7 @@ export default function InterviewSessionPage() {
     } finally {
       setLoading(false);
     }
-  }, [interviewId]);
+  }, [interviewId, navigate]);
 
   useEffect(() => { init(); }, [init]);
 
@@ -152,8 +178,8 @@ export default function InterviewSessionPage() {
     });
     socketRef.current = s;
     s.on('connect', () => setSocketStatus('live'));
-    s.on('disconnect', () => setSocketStatus('offline'));
-    s.on('connect_error', () => setSocketStatus('offline'));
+    s.on('disconnect', () => { setSocketStatus('offline'); setIsReceivingFeedback(false); });
+    s.on('connect_error', () => { setSocketStatus('offline'); setIsReceivingFeedback(false); });
     s.on('ai_chunk', (chunk) => setLiveFeedback((prev) => prev + chunk));
     s.on('ai_complete', () => {
       setIsReceivingFeedback(false);
@@ -260,15 +286,16 @@ export default function InterviewSessionPage() {
     }
     setSubmitting(true);
     try {
-      await sessionAPI.submitAnswer(session._id, {
+      const { data } = await sessionAPI.submitAnswer(session._id, {
         questionId: currentQuestion._id,
         answerText: skipped ? '' : text,
         timeTaken: Math.floor((Date.now() - startTime) / 1000),
         skipped,
       });
-      setSavedAnswers((prev) => ({
-        ...prev,
-        [currentQuestion._id]: { answerText: skipped ? '' : text, skipped, followupUsed: !!prev[currentQuestion._id]?.followupUsed },
+      const saved = data.session?.answers?.find((answer) => answer.questionId === currentQuestion._id);
+      setSavedAnswers((prev) => ({ ...prev,
+        [currentQuestion._id]: { answerText: saved?.answerText ?? (skipped ? '' : text),
+          skipped: saved?.skipped ?? skipped, followupUsed: !!saved?.followupUsed },
       }));
       delete drafts.current[currentQuestion._id];
       return true;
@@ -281,7 +308,7 @@ export default function InterviewSessionPage() {
   }, [session, currentQuestion, answerText, startTime, savedAnswers]);
 
   const goTo = (idx) => {
-    if (idx < 0 || idx >= totalQuestions || idx === currentIdx) return;
+    if (isReceivingFeedback || idx < 0 || idx >= totalQuestions || idx === currentIdx) return;
     if (currentQuestion) drafts.current[currentQuestion._id] = answerText;
     const target = questions[idx];
     setAnswerText(drafts.current[target._id] ?? savedAnswers[target._id]?.answerText ?? '');
@@ -302,11 +329,13 @@ export default function InterviewSessionPage() {
   };
 
   const navigateToQuestion = async (idx) => {
+    if (isReceivingFeedback) return;
     if (idx > currentIdx && !await saveAnswer(false)) return;
     goTo(idx);
   };
 
   const handleComplete = async () => {
+    if (isReceivingFeedback) return;
     const ok = await saveAnswer(false);
     if (!ok) return;
     const answeredIds = new Set(Object.keys(savedAnswers));
@@ -441,7 +470,7 @@ export default function InterviewSessionPage() {
             <div className="mt-6 flex flex-wrap gap-1.5">
               {currentQuestion.category && <span className="rounded-full bg-white/10 px-3 py-1.5 text-[12px]">{CATEGORY_LABEL[currentQuestion.category] || currentQuestion.category}</span>}
               {currentQuestion.difficulty && <span className="rounded-full bg-white/10 px-3 py-1.5 text-[12px] capitalize">{currentQuestion.difficulty}</span>}
-              {interview.resumeId && <span className="rounded-full bg-white/10 px-3 py-1.5 text-[12px]">From your resume</span>}
+              {interview.usedResume && <span className="rounded-full bg-white/10 px-3 py-1.5 text-[12px]">From your resume</span>}
               {saved && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-lime px-3 py-1.5 text-[12px] text-ink">
                   <Check size={12} aria-hidden="true" /> {saved.skipped ? 'Skipped' : 'Saved'}
@@ -505,19 +534,19 @@ export default function InterviewSessionPage() {
             )}
 
             <div className="mt-6 flex flex-col-reverse gap-2 border-t border-line-2 pt-5 sm:flex-row sm:items-center sm:justify-between">
-              <Button variant="ghost" icon={ArrowLeft} onClick={() => goTo(currentIdx - 1)} disabled={currentIdx === 0 || submitting || completing}>
+              <Button variant="ghost" icon={ArrowLeft} onClick={() => goTo(currentIdx - 1)} disabled={currentIdx === 0 || submitting || completing || isReceivingFeedback}>
                 Previous
               </Button>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button variant="soft" icon={SkipForward} onClick={() => isLast ? skipLastQuestion() : handleNext(true)} disabled={submitting || completing}>
+                <Button variant="soft" icon={SkipForward} onClick={() => isLast ? skipLastQuestion() : handleNext(true)} disabled={submitting || completing || isReceivingFeedback}>
                   Skip question
                 </Button>
                 {isLast ? (
-                  <Button variant="lime" cta onClick={handleComplete} loading={completing} disabled={submitting} className="py-[6px]">
+                  <Button variant="lime" cta onClick={handleComplete} loading={completing} disabled={submitting || isReceivingFeedback} className="py-[6px]">
                     {completing ? 'Scoring your answers…' : completeError ? 'Retry scoring' : 'Finish & get report'}
                   </Button>
                 ) : (
-                  <Button variant="ink" iconRight={ArrowRight} onClick={() => handleNext(false)} loading={submitting} disabled={!answerText.trim()}>
+                  <Button variant="ink" iconRight={ArrowRight} onClick={() => handleNext(false)} loading={submitting} disabled={!answerText.trim() || isReceivingFeedback}>
                     Save & next
                   </Button>
                 )}
@@ -573,7 +602,7 @@ export default function InterviewSessionPage() {
                     <button
                       type="button"
                       onClick={() => navigateToQuestion(i)}
-                      disabled={submitting || completing}
+                      disabled={submitting || completing || isReceivingFeedback}
                       aria-label={`Question ${i + 1}${a ? (a.skipped ? ', skipped' : ', answered') : ''}`}
                       aria-current={i === currentIdx ? 'step' : undefined}
                       className={cn(

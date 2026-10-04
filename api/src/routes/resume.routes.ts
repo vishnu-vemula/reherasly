@@ -4,6 +4,7 @@ import { protectPostgres } from '../middleware/postgres-auth.middleware';
 import upload from '../middleware/upload.middleware';
 import { body } from 'express-validator';
 import validate from '../middleware/validate';
+import uuidParam from '../middleware/uuid-param';
 import {
   uploadResume,
   getMyResumes,
@@ -14,6 +15,7 @@ import {
 } from '../controllers/postgres-resume.controller';
 
 router.use(protectPostgres);
+router.param('id', uuidParam);
 
 router.post('/upload', upload.single('resume'), uploadResume);
 router.get('/', getMyResumes);

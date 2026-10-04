@@ -3,6 +3,7 @@ const router = express.Router();
 import { protectPostgres } from '../middleware/postgres-auth.middleware';
 import { body } from 'express-validator';
 import validate from '../middleware/validate';
+import uuidParam from '../middleware/uuid-param';
 import {
   startSession,
   submitAnswer,
@@ -12,6 +13,7 @@ import {
 } from '../controllers/postgres-session.controller';
 
 router.use(protectPostgres);
+router.param('id', uuidParam);
 
 router.get('/', getMySessions);
 router.post('/start', body('interviewId').isUUID(), validate, startSession);

@@ -153,7 +153,7 @@ export default function ResumesPage() {
   const handleDelete = async (resume) => {
     const ok = await confirm({
       title: 'Delete this resume?',
-      description: `“${resume.originalName}” will be permanently removed from storage. Interviews already generated from it keep their questions.`,
+      description: `“${resume.originalName}” will be permanently removed from storage. Interviews with generated questions keep them. Generate any pending interview questions first.`,
       confirmLabel: 'Delete resume',
       tone: 'danger',
     });
@@ -206,7 +206,7 @@ export default function ResumesPage() {
     setParsing(true);
     try {
       const { data } = await resumeAPI.parse(reparse._id, jdInput.trim());
-      setResumes((prev) => prev.map((r) => (r._id === reparse._id ? { ...r, parsedData: data.parsedData, isParsed: true } : r)));
+      setResumes((prev) => prev.map((r) => (r._id === reparse._id ? { ...r, parsedData: data.parsedData, isParsed: true, parseStatus: 'parsed' } : r)));
       toast.success('Resume parsed');
       setExpanded(reparse._id);
       setReparse(null);
@@ -223,7 +223,7 @@ export default function ResumesPage() {
       <PageHeader
         eyebrow="Prepare"
         title="Resumes"
-        description="Every question is grounded in your resume. Files are stored privately — only you can download them."
+        description="Add a resume to tailor interview questions to your experience. Files are stored privately — only you can download them."
       />
 
       {/* Dropzone */}

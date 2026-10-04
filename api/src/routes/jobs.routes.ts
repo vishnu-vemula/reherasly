@@ -186,7 +186,9 @@ router.get(
   [
     param('id')
       .notEmpty().withMessage('Job id is required')
-      .custom(value => /^\d+$/.test(value) || /^[0-9a-f-]{36}$/i.test(value)).withMessage('Invalid job id'),
+      .custom(value => /^\d+$/.test(value) ||
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+      .withMessage('Invalid job id'),
     query('country')
       .optional()
       .isAlpha()
