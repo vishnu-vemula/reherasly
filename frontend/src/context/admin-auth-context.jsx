@@ -18,14 +18,17 @@ const permissions = {
 
 export const AdminAuthProvider = ({ children }) => {
   const [admin, setAdmin] = useState(null);
-  const [isLoading, setLoading] = useState(true);
+  const [isLoading, setLoading] = useState(Boolean(auth));
   const [error, setError] = useState(null);
-  useEffect(() => onAuthStateChanged(auth, async user => {
-    if (!user?.emailVerified) { setAdmin(null); setLoading(false); return; }
-    try { const { data } = await adminApi.get('/admin/auth/me'); setAdmin(data.admin); }
-    catch { setAdmin(null); }
-    finally { setLoading(false); }
-  }), []);
+  useEffect(() => {
+    if (!auth) return undefined;
+    return onAuthStateChanged(auth, async user => {
+      if (!user?.emailVerified) { setAdmin(null); setLoading(false); return; }
+      try { const { data } = await adminApi.get('/admin/auth/me'); setAdmin(data.admin); }
+      catch { setAdmin(null); }
+      finally { setLoading(false); }
+    });
+  }, []);
   const value = useMemo(() => ({
     admin, isAdminAuthenticated: Boolean(admin), isLoading, error,
     adminRole: admin?.role || null, isSuperAdmin: admin?.role === 'super_admin',
@@ -34,6 +37,7 @@ export const AdminAuthProvider = ({ children }) => {
       ((permissions[admin.role] || []).includes('*') || (permissions[admin.role] || []).includes(permission))),
     clearError: () => setError(null),
     adminLogin: async ({ email, password }) => {
+      if (!auth) return { success: false, message: 'Sign-in is temporarily unavailable. Please try again later.' };
       try {
         const credential = await signInWithEmailAndPassword(auth, email, password);
         if (!credential.user.emailVerified) {
@@ -50,7 +54,7 @@ export const AdminAuthProvider = ({ children }) => {
         setAdmin(null); setError(message); return { success: false, message };
       }
     },
-    adminLogout: async () => { await signOut(auth); setAdmin(null); },
+    adminLogout: async () => { if (auth) await signOut(auth); setAdmin(null); },
   }), [admin, error, isLoading]);
   return <AdminAuthContext.Provider value={value}>{children}</AdminAuthContext.Provider>;
 };

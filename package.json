@@ -1,0 +1,11 @@
+{
+  "name": "interview-master",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix api && npm install --prefix frontend",
+    "dev": "npm run dev:web",
+    "dev:web": "npm run dev --prefix frontend",
+    "dev:api": "npm run dev --prefix api",
+    "build": "npm run build --prefix api && npm run build --prefix frontend"
+  }
+}

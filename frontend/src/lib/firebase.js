@@ -11,18 +11,20 @@ if (firebaseMode) {
   }
   const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-  if (!apiKey || !projectId) throw new Error('Firebase web configuration is incomplete');
-  const app = getApps()[0] || initializeApp({
-    apiKey,
-    projectId,
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  });
-  firebaseAuth = getAuth(app);
-  if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL) {
-    connectAuthEmulator(firebaseAuth, import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL, { disableWarnings: true });
+  // A missing auth setting must not prevent public pages from rendering.
+  if (apiKey && projectId) {
+    const app = getApps()[0] || initializeApp({
+      apiKey,
+      projectId,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    });
+    firebaseAuth = getAuth(app);
+    if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL) {
+      connectAuthEmulator(firebaseAuth, import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL, { disableWarnings: true });
+    }
   }
 }
 

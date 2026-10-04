@@ -221,10 +221,18 @@ The bootstrap refuses to promote an existing user or run after any staff account
 ### 5. Run
 
 ```bash
-# root — two terminals, or:
-npm run dev:api          # API    → http://localhost:5000
-npm run dev:web          # Web    → http://localhost:5173
+# From the repository root:
+npm run dev              # Home page → http://localhost:5173
+
+# In a second terminal, start the API for sign-in and application data:
+npm run dev:api          # API → http://localhost:5000
 ```
+
+If port 5173 is busy, Vite prints the next available URL. The public home page
+can open without Firebase settings; sign-in requires the Firebase web values in
+`frontend/.env` and a running API. For Vercel, set those same `VITE_FIREBASE_*`
+values and `VITE_API_URL` in the frontend project's environment before building.
+`VITE_API_URL` must point to a deployed API; `localhost` only works on your computer.
 
 ---
 

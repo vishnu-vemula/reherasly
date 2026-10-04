@@ -11,6 +11,7 @@ import api from '@/lib/axios';
 import { getErrorMessage } from '@/utils';
 
 const firebaseMessage = (error, fallback) => {
+  if (!auth) return 'Sign-in is temporarily unavailable. Please try again later.';
   const code = error?.code || '';
   if (code === 'auth/email-already-in-use') return 'An account with this email already exists.';
   if (code === 'auth/invalid-credential') return 'Invalid email or password.';
@@ -28,7 +29,7 @@ const syncUser = async () => {
 export const useFirebaseAuthStore = create((set, get) => ({
   user: null,
   isAuthenticated: false,
-  isLoading: true,
+  isLoading: Boolean(auth),
   login: async ({ email, password }) => {
     try {
       const credential = await signInWithEmailAndPassword(auth, email, password);

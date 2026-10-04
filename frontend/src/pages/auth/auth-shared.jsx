@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { auth } from '@/lib/firebase';
 
 /** Only allow same-app relative redirects (prevents open redirects via ?next=). */
 export function safeNext(search, fallback = '/dashboard') {
@@ -20,6 +21,7 @@ export function AuthHeading({ title, subtitle }) {
     <div>
       <h1 className="text-[40px] font-medium leading-none tracking-tight2 sm:text-[44px]">{title}</h1>
       {subtitle && <p className="mt-3 text-[16px] leading-normal text-muted-strong">{subtitle}</p>}
+      {!auth && <p role="alert" className="mt-4 rounded-r14 bg-coral-bg px-4 py-3 text-sm text-coral">Sign-in is temporarily unavailable. Please try again later.</p>}
     </div>
   );
 }
